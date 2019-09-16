@@ -1,0 +1,308 @@
+<html>
+	<head>
+		<meta content="text/html;charset=utf-8" http-equiv="Content-Type">
+		<meta content="utf-8" http-equiv="encoding">
+		<title>WebAudio API</title>
+
+
+	</head>
+	<body>
+         <script src="jquery-3.3.1.min.js"></script>
+        <script src="gl.js"></script>
+      Pick an mp3 file
+		<input type="file" name="file"/>
+      <table>
+         <tr>
+            <td colspan="2">
+               <canvas width = "1024" height = "512" id = "my_Canvas" style="width: 100%;"></canvas>
+            </td>
+         </tr>
+         <tr>
+            <td>     
+               <canvas id="freqCanvas" width="1024" height="256" style="width: 100%;"></canvas>
+            </td>
+            <td>
+               <canvas id="dataCanvas" width="1024" height="256" style="width: 100%;"></canvas>
+            </td>
+         </tr>
+      </table>
+
+
+
+		<script>
+         var vSections = 64;
+         var hSections = 128;
+
+
+
+			var context = null;
+			var source = null;
+			var analyser = null;
+			var freqArray = null; 						
+			var dataArray = null;
+			var isPlaying = false;
+					
+			var freqCanvas = document.getElementById("freqCanvas");
+			var dataCanvas = document.getElementById("dataCanvas");
+		
+
+
+  		 var canvas = document.getElementById('my_Canvas');
+         var gl = canvas.getContext('experimental-webgl');
+         var shaderProgram = null;
+         var Pmatrix = null;
+         var Vmatrix = null;
+         var Mmatrix = null;
+         var proj_matrix = null;
+         var mov_matrix = null;
+         var view_matrix = null;
+         var time_old = 0;
+
+         function bindVertices(vertices) {
+            // Create and store data into vertex buffer
+            var vertex_buffer = gl.createBuffer ();
+            gl.bindBuffer(gl.ARRAY_BUFFER, vertex_buffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+            var position = gl.getAttribLocation(shaderProgram, "position");
+            gl.vertexAttribPointer(position, 3, gl.FLOAT, false,0,0) ;
+            gl.enableVertexAttribArray(position);
+         }
+
+         function bindColors(colors) {
+            var color_buffer = gl.createBuffer ();
+			gl.bindBuffer(gl.ARRAY_BUFFER, color_buffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(colors), gl.STATIC_DRAW);
+            var color = gl.getAttribLocation(shaderProgram, "color");
+            gl.vertexAttribPointer(color, 3, gl.FLOAT, false,0,0) ;
+            gl.enableVertexAttribArray(color);
+         }
+
+         function bindIndices(indices) {
+	        var index_buffer = gl.createBuffer ();
+	        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, index_buffer);
+	        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(indices), gl.STATIC_DRAW);
+         }
+
+         function init() {
+            /* ====== Associating attributes to vertex shader =====*/
+            Pmatrix = gl.getUniformLocation(shaderProgram, "Pmatrix");
+            Vmatrix = gl.getUniformLocation(shaderProgram, "Vmatrix");
+            Mmatrix = gl.getUniformLocation(shaderProgram, "Mmatrix");
+
+     
+            gl.useProgram(shaderProgram);
+
+            /*==================== MATRIX =====================*/
+
+            proj_matrix = get_projection(40, canvas.width/canvas.height, 1, 100);
+            mov_matrix = [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
+
+   
+            view_matrix = [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
+
+            // translating z
+            view_matrix[14] = view_matrix[14]-10;//zoom
+
+         }
+
+         function recalcVertices() {
+            var r = 1;
+            var vertices = [];
+
+            for(var i=0 ; i < hSections ; ++i) {
+               for(var j=0 ; j < vSections ; ++j) {
+                  var vAngle = j*Math.PI/vSections;
+                  var hAngle = i*2*Math.PI/hSections;
+
+                  var ix = parseInt(i*dataArray.length/hSections);
+                  var iy = parseInt(j*freqArray.length/vSections);
+                  var rx = dataArray[ix]/256 ;
+                  var ry = freqArray[iy]/256;
+                  r = rx + ry+1;
+
+                  var x = r*Math.sin(vAngle)*Math.cos(hAngle);
+                  var y = r*Math.sin(vAngle)*Math.sin(hAngle);
+                  var z = r*Math.cos(vAngle);
+                  vertices.push(x);
+                  vertices.push(y);
+                  vertices.push(z);
+               }
+            }
+            bindVertices(vertices);
+         }
+
+         function updateSoundData(){
+         	if(isPlaying) {
+   				analyser.getByteFrequencyData(freqArray);
+   				analyser.getByteTimeDomainData(dataArray);
+         	}
+         }
+
+
+        function drawCharts() {
+    		var freqCtx = freqCanvas.getContext("2d");
+			var dataCtx = dataCanvas.getContext("2d");
+        	if(isPlaying) {
+				freqCtx.clearRect(0, 0, freqCanvas.width, freqCanvas.height);
+				dataCtx.clearRect(0, 0, dataCanvas.width, dataCanvas.height);
+
+				for (var x = 0; x < freqArray.length; x++) {
+					var y = freqArray[x];
+					drawBar(freqCtx, x, 256-y, 1, y, '#000');
+				}
+				for (var x = 0; x < dataArray.length; x++) {
+					var y = dataArray[x];
+					drawBar(dataCtx, x, 256-y, 1, y, '#000');
+				}
+			}
+        }
+
+         function draw(time) {
+
+            var dt = time-time_old;
+            rotateZ(mov_matrix, dt*0.0005);//time
+            rotateY(mov_matrix, dt*0.0002);
+            rotateX(mov_matrix, dt*0.0003);
+            time_old = time;
+
+			   updateSoundData();
+            recalcVertices();
+            drawCharts();
+
+            gl.enable(gl.DEPTH_TEST);
+            gl.depthFunc(gl.LEQUAL);
+            gl.clearColor(0.0, 0.0, 0.0, 0.0);
+            gl.clearDepth(1.0);
+
+            gl.viewport(0.0, 0.0, canvas.width, canvas.height);
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+            gl.uniformMatrix4fv(Pmatrix, false, proj_matrix);
+            gl.uniformMatrix4fv(Vmatrix, false, view_matrix);
+            gl.uniformMatrix4fv(Mmatrix, false, mov_matrix);
+            gl.drawElements(gl.TRIANGLES, indices.length, gl.UNSIGNED_SHORT, 0);
+
+            window.requestAnimationFrame(draw);
+         }
+
+         /*============= Creating a canvas =================*/
+
+
+         /*============ Defining and storing the geometry =========*/
+         var r = 1;
+         var vertices = [];
+         var indices = [];
+         var colors = [];
+
+         for(var i=0 ; i < hSections ; ++i) {
+            for(var j=0 ; j < vSections ; ++j) {
+               var vAngle = j*Math.PI/vSections;
+               var hAngle = i*2*Math.PI/hSections;
+
+               var x = r*Math.sin(vAngle)*Math.cos(hAngle);
+               var y = r*Math.sin(vAngle)*Math.sin(hAngle);
+               var z = r*Math.cos(vAngle);
+               vertices.push(x);
+               vertices.push(y);
+               vertices.push(z);
+               colors.push((x+1)*0.5);
+               colors.push((y+1)*0.5);
+               colors.push((z+1)*0.5);
+            }
+         }
+
+
+         for(var i=0 ; i < hSections ; ++i) {
+            for(var j=0 ; j < vSections ; ++j) {
+               indices.push(((i+0)%hSections)*vSections+((j+0)%vSections) );
+               indices.push(((i+1)%hSections)*vSections+((j+0)%vSections) );
+               indices.push(((i+0)%hSections)*vSections+((j+1)%vSections) );
+
+               indices.push(((i+1)%hSections)*vSections+((j+0)%vSections) );
+               indices.push(((i+0)%hSections)*vSections+((j+1)%vSections) );
+               indices.push(((i+1)%hSections)*vSections+((j+1)%vSections) );
+            }
+         }
+
+         /*=================== Shaders =========================*/
+
+         $(document).ready(function() {
+            downloadTextFile( "shader.vert", function( vertCode ) {
+               downloadTextFile( "shader.frag", function( fragCode ) {
+                  	console.log(vertCode);
+                  	shaderProgram = webglInit(gl, vertCode, fragCode);
+                  	init();
+					bindVertices(vertices);
+					bindColors(colors);
+					bindIndices(indices);
+                  	draw(0);
+               });
+            });
+
+
+			initWebAudio();
+	
+			$("input:file").change(function (){
+   				var file = $(this)[0].files[0];
+   				if (file) {
+   					var reader = new FileReader();
+   					reader.readAsArrayBuffer(file);
+   					reader.onload = function(e) {
+   						var arrayBuffer = e.target.result;
+   						playSound(arrayBuffer);
+   					};
+   				}
+    			});
+         });
+
+
+
+			function drawBar(ctx, upperLeftCornerX, upperLeftCornerY, width, height,color){
+			    ctx.save();
+			    ctx.fillStyle=color;
+			    ctx.fillRect(upperLeftCornerX,upperLeftCornerY,width,height);
+			    ctx.restore();
+			}
+
+			function playSound(data) {
+				console.log('data', data);
+				context.decodeAudioData(data, function(buffer) {
+				
+					source.buffer = buffer;
+					source.loop = true;
+					source.start(0);
+  					isPlaying = true;
+				});
+			}
+
+			function initWebAudio() {
+				try {
+					// Fix up for prefixing
+					window.AudioContext = window.AudioContext||window.webkitAudioContext;
+					context = new AudioContext();
+					source = context.createBufferSource(); 
+					analyser = context.createAnalyser();
+					source.connect(analyser); 
+					analyser.connect(context.destination); 
+
+					freqArray = new Uint8Array(analyser.frequencyBinCount); 						
+					dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+					source.onended = function(event) {
+  						isPlaying = false;
+					}					
+
+
+				}
+				catch(e) {
+					alert('Web Audio API is not supported in this browser');
+				}
+			}
+
+			function onError(event) {
+				console.log("error", event);				
+			}
+
+
+		</script>
+	</body>
+</html>
